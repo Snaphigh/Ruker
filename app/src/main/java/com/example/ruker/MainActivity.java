@@ -1,7 +1,10 @@
 package com.example.ruker;
 
+import static androidx.core.content.ContextCompat.startActivity;
+
 import android.Manifest;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
@@ -14,7 +17,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
-import android.provider.Settings;
 import android.util.Log;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -39,6 +41,8 @@ import com.google.android.gms.maps.model.Polyline;
 import com.google.android.gms.maps.model.PolylineOptions;
 import com.google.android.material.button.MaterialButton;
 import com.google.firebase.Timestamp;
+import com.google.firebase.auth.FirebaseAuth;
+import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.QueryDocumentSnapshot;
 
@@ -84,7 +88,9 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     private volatile String lastClassificationLabel = "Idle";
     
     private FirebaseFirestore db;
-    private String deviceId;
+    private FirebaseAuth mAuth;
+    private String userId;
+    
     private boolean isRecording = false;
     private boolean isShowingCommunity = false;
     private String currentRunId;
@@ -127,15 +133,24 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
+        mAuth = FirebaseAuth.getInstance();
+        FirebaseUser currentUser = mAuth.getCurrentUser();
+        
+        // Security check: If not logged in, go back to Login screen
+        if (currentUser == null) {
+            startActivity(new Intent(this, LoginActivity.class));
+            finish();
+            return;
+        }
+        
+        userId = currentUser.getUid();
+        db = FirebaseFirestore.getInstance();
+
         statusText = findViewById(R.id.statusText);
         timerText = findViewById(R.id.timerText);
         recordButton = findViewById(R.id.recordButton);
         communityButton = findViewById(R.id.communityButton);
         myPathsButton = findViewById(R.id.myPathsButton);
-
-        db = FirebaseFirestore.getInstance();
-        // Use ANDROID_ID as a simple unique device identifier
-        deviceId = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
 
         SupportMapFragment mapFragment = (SupportMapFragment) getSupportFragmentManager()
                 .findFragmentById(R.id.map);
@@ -231,15 +246,10 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
 
     private void showMyPathsDialog() {
         db.collection("recorded_paths")
-                .whereEqualTo("device_id", deviceId)
+                .whereEqualTo("user_id", userId) // Updated from device_id to user_id
                 .whereEqualTo("is_public", false)
                 .get()
                 .addOnSuccessListener(queryDocumentSnapshots -> {
-                    if (queryDocumentSnapshots.isEmpty()) {
-                        Toast.makeText(this, "No private paths found.", Toast.LENGTH_SHORT).show();
-                        return;
-                    }
-
                     List<String> pathNames = new ArrayList<>();
                     List<String> docIds = new ArrayList<>();
                     SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault());
@@ -257,10 +267,17 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                             .setItems(pathNames.toArray(new String[0]), (dialog, which) -> {
                                 confirmPublishDialog(docIds.get(which), pathNames.get(which));
                             })
+                            .setNeutralButton("Sign Out", (dialog, which) -> signOutUser())
                             .setNegativeButton("Close", null)
                             .show();
                 })
                 .addOnFailureListener(e -> Log.e("Firebase", "Error fetching my paths", e));
+    }
+
+    private void signOutUser() {
+        mAuth.signOut();
+        startActivity(new Intent(MainActivity.this, LoginActivity.class));
+        finish();
     }
 
     private void confirmPublishDialog(String docId, String pathName) {
@@ -277,7 +294,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                 .update("is_public", true)
                 .addOnSuccessListener(aVoid -> {
                     Toast.makeText(this, "Path shared with community!", Toast.LENGTH_SHORT).show();
-                    if (isShowingCommunity) fetchCommunityPaths(); // Refresh map
+                    if (isShowingCommunity) fetchCommunityPaths();
                 })
                 .addOnFailureListener(e -> Log.e("Firebase", "Error sharing path", e));
     }
@@ -365,7 +382,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     private void uploadRunToFirebase(boolean isPublic) {
         Map<String, Object> runData = new HashMap<>();
         runData.put("run_id", currentRunId);
-        runData.put("device_id", deviceId); // Track who owns the path
+        runData.put("user_id", userId); // Use unique UID
         runData.put("start_time", startTimestamp);
         runData.put("path", new ArrayList<>(currentRunPath));
         runData.put("is_public", isPublic);
