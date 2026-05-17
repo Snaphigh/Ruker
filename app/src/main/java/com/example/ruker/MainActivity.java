@@ -14,6 +14,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.provider.Settings;
 import android.util.Log;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -34,11 +35,14 @@ import com.google.android.gms.maps.GoogleMap;
 import com.google.android.gms.maps.OnMapReadyCallback;
 import com.google.android.gms.maps.SupportMapFragment;
 import com.google.android.gms.maps.model.LatLng;
+import com.google.android.gms.maps.model.Polyline;
 import com.google.android.gms.maps.model.PolylineOptions;
 import com.google.android.material.button.MaterialButton;
 import com.google.firebase.Timestamp;
 import com.google.firebase.firestore.FirebaseFirestore;
+import com.google.firebase.firestore.QueryDocumentSnapshot;
 
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -73,14 +77,20 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     private TextView statusText;
     private TextView timerText;
     private MaterialButton recordButton;
+    private MaterialButton communityButton;
+    private MaterialButton myPathsButton;
+    
     private volatile int lastClassificationColor = Color.GRAY;
     private volatile String lastClassificationLabel = "Idle";
     
     private FirebaseFirestore db;
+    private String deviceId;
     private boolean isRecording = false;
+    private boolean isShowingCommunity = false;
     private String currentRunId;
     private Timestamp startTimestamp;
     private final List<Map<String, Object>> currentRunPath = new ArrayList<>();
+    private final List<Polyline> communityPolylines = new ArrayList<>();
     
     private long startTime = 0L;
     private final Handler timerHandler = new Handler(Looper.getMainLooper());
@@ -120,8 +130,12 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         statusText = findViewById(R.id.statusText);
         timerText = findViewById(R.id.timerText);
         recordButton = findViewById(R.id.recordButton);
+        communityButton = findViewById(R.id.communityButton);
+        myPathsButton = findViewById(R.id.myPathsButton);
 
         db = FirebaseFirestore.getInstance();
+        // Use ANDROID_ID as a simple unique device identifier
+        deviceId = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
 
         SupportMapFragment mapFragment = (SupportMapFragment) getSupportFragmentManager()
                 .findFragmentById(R.id.map);
@@ -144,6 +158,128 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                 stopRecording();
             }
         });
+
+        communityButton.setOnClickListener(v -> toggleCommunityMap());
+        myPathsButton.setOnClickListener(v -> showMyPathsDialog());
+    }
+
+    private void toggleCommunityMap() {
+        if (!isShowingCommunity) {
+            fetchCommunityPaths();
+        } else {
+            clearCommunityPaths();
+            communityButton.setText("Show Community");
+            isShowingCommunity = false;
+        }
+    }
+
+    private void fetchCommunityPaths() {
+        communityButton.setEnabled(false);
+        communityButton.setText("Loading...");
+        
+        db.collection("recorded_paths")
+                .whereEqualTo("is_public", true)
+                .get()
+                .addOnSuccessListener(queryDocumentSnapshots -> {
+                    clearCommunityPaths();
+                    for (QueryDocumentSnapshot document : queryDocumentSnapshots) {
+                        drawPathFromData(document.getData());
+                    }
+                    communityButton.setText("Hide Community");
+                    communityButton.setEnabled(true);
+                    isShowingCommunity = true;
+                })
+                .addOnFailureListener(e -> {
+                    Log.e("Firebase", "Error fetching community paths", e);
+                    Toast.makeText(this, "Failed to load community map", Toast.LENGTH_SHORT).show();
+                    communityButton.setEnabled(true);
+                    communityButton.setText("Show Community");
+                });
+    }
+
+    private void drawPathFromData(Map<String, Object> data) {
+        if (mMap == null) return;
+        List<Map<String, Object>> path = (List<Map<String, Object>>) data.get("path");
+        if (path == null || path.size() < 2) return;
+
+        for (int i = 0; i < path.size() - 1; i++) {
+            Map<String, Object> p1 = path.get(i);
+            Map<String, Object> p2 = path.get(i + 1);
+            
+            LatLng l1 = new LatLng((double) p1.get("latitude"), (double) p1.get("longitude"));
+            LatLng l2 = new LatLng((double) p2.get("latitude"), (double) p2.get("longitude"));
+            
+            String terrain = (String) p1.get("terrain_type");
+            int color = Color.argb(120, 128, 128, 128); 
+            if ("Smooth".equals(terrain)) color = Color.argb(120, 76, 175, 80);
+            else if ("Tough".equals(terrain)) color = Color.argb(120, 244, 67, 54);
+
+            Polyline polyline = mMap.addPolyline(new PolylineOptions()
+                    .add(l1, l2)
+                    .color(color)
+                    .width(10));
+            communityPolylines.add(polyline);
+        }
+    }
+
+    private void clearCommunityPaths() {
+        for (Polyline p : communityPolylines) {
+            p.remove();
+        }
+        communityPolylines.clear();
+    }
+
+    private void showMyPathsDialog() {
+        db.collection("recorded_paths")
+                .whereEqualTo("device_id", deviceId)
+                .whereEqualTo("is_public", false)
+                .get()
+                .addOnSuccessListener(queryDocumentSnapshots -> {
+                    if (queryDocumentSnapshots.isEmpty()) {
+                        Toast.makeText(this, "No private paths found.", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+
+                    List<String> pathNames = new ArrayList<>();
+                    List<String> docIds = new ArrayList<>();
+                    SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault());
+
+                    for (QueryDocumentSnapshot doc : queryDocumentSnapshots) {
+                        Timestamp ts = doc.getTimestamp("start_time");
+                        if (ts != null) {
+                            pathNames.add("Path from " + sdf.format(ts.toDate()));
+                            docIds.add(doc.getId());
+                        }
+                    }
+
+                    new AlertDialog.Builder(this)
+                            .setTitle("My Private Paths")
+                            .setItems(pathNames.toArray(new String[0]), (dialog, which) -> {
+                                confirmPublishDialog(docIds.get(which), pathNames.get(which));
+                            })
+                            .setNegativeButton("Close", null)
+                            .show();
+                })
+                .addOnFailureListener(e -> Log.e("Firebase", "Error fetching my paths", e));
+    }
+
+    private void confirmPublishDialog(String docId, String pathName) {
+        new AlertDialog.Builder(this)
+                .setTitle("Publish Path")
+                .setMessage("Do you want to upload \"" + pathName + "\" to the community map?")
+                .setPositiveButton("Upload", (dialog, which) -> sharePath(docId))
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void sharePath(String docId) {
+        db.collection("recorded_paths").document(docId)
+                .update("is_public", true)
+                .addOnSuccessListener(aVoid -> {
+                    Toast.makeText(this, "Path shared with community!", Toast.LENGTH_SHORT).show();
+                    if (isShowingCommunity) fetchCommunityPaths(); // Refresh map
+                })
+                .addOnFailureListener(e -> Log.e("Firebase", "Error sharing path", e));
     }
 
     private void showSecurePhoneDialog() {
@@ -191,6 +327,9 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         currentRunPath.clear();
         
         if (mMap != null) mMap.clear();
+        if (isShowingCommunity) clearCommunityPaths();
+        isShowingCommunity = false;
+        communityButton.setText("Show Community");
     }
 
     private void stopRecording() {
@@ -200,24 +339,41 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         recordButton.setText("Start Recording");
         timerText.setText("00:00");
 
-        uploadRunToFirebase();
+        showUploadOptionsDialog();
     }
 
-    private void uploadRunToFirebase() {
+    private void showUploadOptionsDialog() {
         if (currentRunPath.isEmpty()) {
-            Toast.makeText(this, "No valid data to save.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "No valid path data to save.", Toast.LENGTH_SHORT).show();
             return;
         }
 
+        String[] options = {"Upload to Community", "Save Privately", "Discard"};
+        new AlertDialog.Builder(this)
+                .setTitle("Recording Finished")
+                .setItems(options, (dialog, which) -> {
+                    switch (which) {
+                        case 0: uploadRunToFirebase(true); break;
+                        case 1: uploadRunToFirebase(false); break;
+                        case 2: Toast.makeText(this, "Discarded", Toast.LENGTH_SHORT).show(); break;
+                    }
+                })
+                .setCancelable(false)
+                .show();
+    }
+
+    private void uploadRunToFirebase(boolean isPublic) {
         Map<String, Object> runData = new HashMap<>();
         runData.put("run_id", currentRunId);
+        runData.put("device_id", deviceId); // Track who owns the path
         runData.put("start_time", startTimestamp);
         runData.put("path", new ArrayList<>(currentRunPath));
+        runData.put("is_public", isPublic);
 
         db.collection("recorded_paths")
                 .add(runData)
                 .addOnSuccessListener(documentReference -> 
-                    Toast.makeText(MainActivity.this, "Path synced to Firebase!", Toast.LENGTH_SHORT).show())
+                    Toast.makeText(MainActivity.this, isPublic ? "Path synced to Community!" : "Path saved privately!", Toast.LENGTH_SHORT).show())
                 .addOnFailureListener(e -> 
                     Log.e("Firebase", "Error saving run", e));
     }
@@ -346,7 +502,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                 lastClassificationLabel = smoothedTerrain.label;
                 final String label = smoothedTerrain.label;
                 final float confidence = maxVal;
-                runOnUiThread(() -> statusText.setText(String.format(Locale.US, "%s %.2", label, confidence)));
+                runOnUiThread(() -> statusText.setText(String.format(Locale.US, "%s %.2f", label, confidence)));
             }
         }
     }
