@@ -54,6 +54,7 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -253,10 +254,10 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             Map<String, Object> p2 = path.get(i + 1);
             
             try {
-                double lat1 = ((Number) p1.get("latitude")).doubleValue();
-                double lng1 = ((Number) p1.get("longitude")).doubleValue();
-                double lat2 = ((Number) p2.get("latitude")).doubleValue();
-                double lng2 = ((Number) p2.get("longitude")).doubleValue();
+                double lat1 = ((Number) Objects.requireNonNull(p1.get("latitude"))).doubleValue();
+                double lng1 = ((Number) Objects.requireNonNull(p1.get("longitude"))).doubleValue();
+                double lat2 = ((Number) Objects.requireNonNull(p2.get("latitude"))).doubleValue();
+                double lng2 = ((Number) Objects.requireNonNull(p2.get("longitude"))).doubleValue();
 
                 LatLng l1 = new LatLng(lat1, lng1);
                 LatLng l2 = new LatLng(lat2, lng2);
@@ -287,23 +288,29 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     private void showMyPathsDialog() {
         db.collection("recorded_paths")
                 .whereEqualTo("user_id", userId)
-                .whereEqualTo("is_public", false)
                 .get()
                 .addOnSuccessListener(queryDocumentSnapshots -> {
                     List<String> pathNames = new ArrayList<>();
                     List<String> docIds = new ArrayList<>();
                     SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault());
 
+                    if (queryDocumentSnapshots.isEmpty()) {
+                        Toast.makeText(this, "No paths found.", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+
                     for (QueryDocumentSnapshot doc : queryDocumentSnapshots) {
                         Timestamp ts = doc.getTimestamp("start_time");
                         if (ts != null) {
-                            pathNames.add("Path from " + sdf.format(ts.toDate()));
+                            Boolean isPublic = doc.getBoolean("is_public");
+                            String status = Boolean.TRUE.equals(isPublic) ? " 🌍 Public" : " 🔒 Private";
+                            pathNames.add("Path from " + sdf.format(ts.toDate()) + status);
                             docIds.add(doc.getId());
                         }
                     }
 
                     new AlertDialog.Builder(this)
-                            .setTitle("My Private Paths")
+                            .setTitle("My Paths")
                             .setItems(pathNames.toArray(new String[0]), (dialog, which) -> {
                                 confirmPublishDialog(docIds.get(which), pathNames.get(which));
                             })
@@ -387,9 +394,13 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         if (isShowingCommunity) clearCommunityPaths();
         isShowingCommunity = false;
         communityButton.setText("Show Community");
+        if (accelerometer != null) {
+            sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_GAME);
+        }
     }
 
     private void stopRecording() {
+        sensorManager.unregisterListener(this);
         isRecording = false;
         timerHandler.removeCallbacks(timerRunnable);
         recordButton.setBackgroundTintList(ColorStateList.valueOf(Color.parseColor("#388E3C")));
@@ -584,15 +595,18 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     @Override
     protected void onResume() {
         super.onResume();
-        if (accelerometer != null) {
+        if (isRecording && accelerometer != null) {
             sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_GAME);
         }
     }
 
+
     @Override
     protected void onPause() {
         super.onPause();
-        sensorManager.unregisterListener(this);
+        if (isRecording) {
+            sensorManager.unregisterListener(this);
+        }
     }
 
     @Override
