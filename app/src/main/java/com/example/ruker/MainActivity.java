@@ -1,7 +1,5 @@
 package com.example.ruker;
 
-import static androidx.core.content.ContextCompat.startActivity;
-
 import android.Manifest;
 import android.content.Context;
 import android.content.Intent;
@@ -37,6 +35,7 @@ import com.google.android.gms.maps.GoogleMap;
 import com.google.android.gms.maps.OnMapReadyCallback;
 import com.google.android.gms.maps.SupportMapFragment;
 import com.google.android.gms.maps.model.LatLng;
+import com.google.android.gms.maps.model.LatLngBounds;
 import com.google.android.gms.maps.model.Polyline;
 import com.google.android.gms.maps.model.PolylineOptions;
 import com.google.android.material.button.MaterialButton;
@@ -136,7 +135,6 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         mAuth = FirebaseAuth.getInstance();
         FirebaseUser currentUser = mAuth.getCurrentUser();
         
-        // Security check: If not logged in, go back to Login screen
         if (currentUser == null) {
             startActivity(new Intent(this, LoginActivity.class));
             finish();
@@ -197,16 +195,49 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                 .get()
                 .addOnSuccessListener(queryDocumentSnapshots -> {
                     clearCommunityPaths();
-                    for (QueryDocumentSnapshot document : queryDocumentSnapshots) {
-                        drawPathFromData(document.getData());
+                    Log.d("Firebase", "Fetched " + queryDocumentSnapshots.size() + " community paths");
+                    
+                    if (queryDocumentSnapshots.isEmpty()) {
+                        Toast.makeText(this, "No community paths found.", Toast.LENGTH_SHORT).show();
+                        communityButton.setText("Show Community");
+                        communityButton.setEnabled(true);
+                        return;
                     }
+
+                    LatLngBounds.Builder builder = new LatLngBounds.Builder();
+                    boolean hasPoints = false;
+
+                    for (QueryDocumentSnapshot document : queryDocumentSnapshots) {
+                        List<Map<String, Object>> path = (List<Map<String, Object>>) document.get("path");
+                        if (path != null && path.size() >= 2) {
+                            drawPathFromData(document.getData());
+                            for (Map<String, Object> point : path) {
+                                try {
+                                    double lat = ((Number) point.get("latitude")).doubleValue();
+                                    double lng = ((Number) point.get("longitude")).doubleValue();
+                                    builder.include(new LatLng(lat, lng));
+                                    hasPoints = true;
+                                } catch (Exception ignored) {}
+                            }
+                        }
+                    }
+
+                    if (hasPoints && mMap != null) {
+                        try {
+                            mMap.animateCamera(CameraUpdateFactory.newLatLngBounds(builder.build(), 100));
+                        } catch (IllegalStateException e) {
+                            // Map might not have layout yet
+                            Log.e("Map", "Camera bounds animation failed", e);
+                        }
+                    }
+
                     communityButton.setText("Hide Community");
                     communityButton.setEnabled(true);
                     isShowingCommunity = true;
                 })
                 .addOnFailureListener(e -> {
                     Log.e("Firebase", "Error fetching community paths", e);
-                    Toast.makeText(this, "Failed to load community map", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, "Fetching failed. Check Logcat for details.", Toast.LENGTH_LONG).show();
                     communityButton.setEnabled(true);
                     communityButton.setText("Show Community");
                 });
@@ -221,19 +252,28 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             Map<String, Object> p1 = path.get(i);
             Map<String, Object> p2 = path.get(i + 1);
             
-            LatLng l1 = new LatLng((double) p1.get("latitude"), (double) p1.get("longitude"));
-            LatLng l2 = new LatLng((double) p2.get("latitude"), (double) p2.get("longitude"));
-            
-            String terrain = (String) p1.get("terrain_type");
-            int color = Color.argb(120, 128, 128, 128); 
-            if ("Smooth".equals(terrain)) color = Color.argb(120, 76, 175, 80);
-            else if ("Tough".equals(terrain)) color = Color.argb(120, 244, 67, 54);
+            try {
+                double lat1 = ((Number) p1.get("latitude")).doubleValue();
+                double lng1 = ((Number) p1.get("longitude")).doubleValue();
+                double lat2 = ((Number) p2.get("latitude")).doubleValue();
+                double lng2 = ((Number) p2.get("longitude")).doubleValue();
 
-            Polyline polyline = mMap.addPolyline(new PolylineOptions()
-                    .add(l1, l2)
-                    .color(color)
-                    .width(10));
-            communityPolylines.add(polyline);
+                LatLng l1 = new LatLng(lat1, lng1);
+                LatLng l2 = new LatLng(lat2, lng2);
+                
+                String terrain = (String) p1.get("terrain_type");
+                int color = Color.argb(120, 128, 128, 128); 
+                if ("Smooth".equals(terrain)) color = Color.argb(120, 76, 175, 80);
+                else if ("Tough".equals(terrain)) color = Color.argb(120, 244, 67, 54);
+
+                Polyline polyline = mMap.addPolyline(new PolylineOptions()
+                        .add(l1, l2)
+                        .color(color)
+                        .width(10));
+                communityPolylines.add(polyline);
+            } catch (Exception e) {
+                Log.e("Map", "Error parsing path segment", e);
+            }
         }
     }
 
@@ -246,7 +286,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
 
     private void showMyPathsDialog() {
         db.collection("recorded_paths")
-                .whereEqualTo("user_id", userId) // Updated from device_id to user_id
+                .whereEqualTo("user_id", userId)
                 .whereEqualTo("is_public", false)
                 .get()
                 .addOnSuccessListener(queryDocumentSnapshots -> {
@@ -382,7 +422,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     private void uploadRunToFirebase(boolean isPublic) {
         Map<String, Object> runData = new HashMap<>();
         runData.put("run_id", currentRunId);
-        runData.put("user_id", userId); // Use unique UID
+        runData.put("user_id", userId);
         runData.put("start_time", startTimestamp);
         runData.put("path", new ArrayList<>(currentRunPath));
         runData.put("is_public", isPublic);
