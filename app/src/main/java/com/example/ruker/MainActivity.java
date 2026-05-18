@@ -459,6 +459,15 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                     }
 
                     if (isRecording && lastLatLng != null && mMap != null) {
+                        //fixing GPS drift
+                        if (location.hasAccuracy() && location.getAccuracy() > 15f) {
+                            lastLatLng = currentLatLng;
+                            return;
+                        }
+                        float[] dist = new float[1];
+                        Location.distanceBetween(lastLatLng.latitude, lastLatLng.longitude,
+                                currentLatLng.latitude, currentLatLng.longitude, dist);
+                        if (dist[0] < 2.0f) return;
                         mMap.addPolyline(new PolylineOptions()
                                 .add(lastLatLng, currentLatLng)
                                 .color(lastClassificationColor)
