@@ -3,6 +3,7 @@ package com.example.ruker;
 import android.Manifest;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
@@ -20,6 +21,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
@@ -45,7 +47,6 @@ import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.QueryDocumentSnapshot;
 
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -69,35 +70,39 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
 
     private SensorManager sensorManager;
     private Sensor accelerometer;
-    
+
     private static final int RAW_SAMPLE_COUNT = 125;
     private static final int SAMPLES_PER_FRAME = 3;
     private final float[] inputBuffer = new float[RAW_SAMPLE_COUNT * SAMPLES_PER_FRAME];
-    
+
     private final ExecutorService inferenceExecutor = Executors.newSingleThreadExecutor();
     private int inferenceCounter = 0;
-    private static final int INFERENCE_INTERVAL_SAMPLES = 8; 
+    private static final int INFERENCE_INTERVAL_SAMPLES = 8;
 
     private TextView statusText;
     private TextView timerText;
     private MaterialButton recordButton;
     private MaterialButton communityButton;
-    private MaterialButton myPathsButton;
-    
+
+
+    private MaterialButton profileButton;
+
     private volatile int lastClassificationColor = Color.GRAY;
     private volatile String lastClassificationLabel = "Idle";
-    
+
     private FirebaseFirestore db;
     private FirebaseAuth mAuth;
     private String userId;
-    
+
     private boolean isRecording = false;
     private boolean isShowingCommunity = false;
     private String currentRunId;
     private Timestamp startTimestamp;
     private final List<Map<String, Object>> currentRunPath = new ArrayList<>();
     private final List<Polyline> communityPolylines = new ArrayList<>();
-    
+
+    private final List<Polyline> myPathPolylines = new ArrayList<>();
+
     private long startTime = 0L;
     private final Handler timerHandler = new Handler(Looper.getMainLooper());
     private final Runnable timerRunnable = new Runnable() {
@@ -113,19 +118,15 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     };
 
     enum Terrain {
-        IDLE(Color.GRAY, "Idle"),
-        SMOOTH(Color.parseColor("#4CAF50"), "Smooth"),
-        TOUGH(Color.parseColor("#F44336"), "Tough");
+        IDLE("Idle"),
+        SMOOTH("Smooth"),
+        TOUGH("Tough");
 
-        final int color;
         final String label;
-        Terrain(int color, String label) {
-            this.color = color;
-            this.label = label;
-        }
+        Terrain(String label) { this.label = label; }
     }
 
-    private static final int SMOOTHING_WINDOW_SIZE = 3; 
+    private static final int SMOOTHING_WINDOW_SIZE = 3;
     private final LinkedList<Terrain> recentTerrains = new LinkedList<>();
 
     @Override
@@ -135,21 +136,21 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
 
         mAuth = FirebaseAuth.getInstance();
         FirebaseUser currentUser = mAuth.getCurrentUser();
-        
+
         if (currentUser == null) {
             startActivity(new Intent(this, LoginActivity.class));
             finish();
             return;
         }
-        
+
         userId = currentUser.getUid();
         db = FirebaseFirestore.getInstance();
 
-        statusText = findViewById(R.id.statusText);
-        timerText = findViewById(R.id.timerText);
-        recordButton = findViewById(R.id.recordButton);
+        statusText      = findViewById(R.id.statusText);
+        timerText       = findViewById(R.id.timerText);
+        recordButton    = findViewById(R.id.recordButton);
         communityButton = findViewById(R.id.communityButton);
-        myPathsButton = findViewById(R.id.myPathsButton);
+        profileButton   = findViewById(R.id.profileButton); // NOVO
 
         SupportMapFragment mapFragment = (SupportMapFragment) getSupportFragmentManager()
                 .findFragmentById(R.id.map);
@@ -174,8 +175,133 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         });
 
         communityButton.setOnClickListener(v -> toggleCommunityMap());
-        myPathsButton.setOnClickListener(v -> showMyPathsDialog());
+
+        profileButton.setOnClickListener(v -> {
+            Intent intent = new Intent(MainActivity.this, ProfileActivity.class);
+            startActivityForResult(intent, MyPathsActivity.REQUEST_SHOW_PATH);
+        });
+
+        applyFontSizeSettings(); // NOVO
     }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+
+        if (requestCode == MyPathsActivity.REQUEST_SHOW_PATH
+                && resultCode == RESULT_OK
+                && data != null) {
+            String docId = data.getStringExtra(MyPathsActivity.EXTRA_PATH_DOC_ID);
+            if (docId != null) {
+                loadAndShowPathOnMap(docId);
+            }
+        }
+    }
+
+    private void loadAndShowPathOnMap(String docId) {
+        db.collection("recorded_paths")
+                .document(docId)
+                .get()
+                .addOnSuccessListener(documentSnapshot -> {
+                    if (!documentSnapshot.exists()) {
+                        Toast.makeText(this, "Pot ni bila najdena.", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+
+                    clearMyPathPolylines();
+
+                    List<Map<String, Object>> path =
+                            (List<Map<String, Object>>) documentSnapshot.get("path");
+
+                    if (path == null || path.size() < 2) {
+                        Toast.makeText(this, "Pot nima dovolj točk.", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+
+                    LatLngBounds.Builder builder = new LatLngBounds.Builder();
+
+                    for (int i = 0; i < path.size() - 1; i++) {
+                        Map<String, Object> p1 = path.get(i);
+                        Map<String, Object> p2 = path.get(i + 1);
+                        try {
+                            double lat1 = ((Number) Objects.requireNonNull(p1.get("latitude"))).doubleValue();
+                            double lng1 = ((Number) Objects.requireNonNull(p1.get("longitude"))).doubleValue();
+                            double lat2 = ((Number) Objects.requireNonNull(p2.get("latitude"))).doubleValue();
+                            double lng2 = ((Number) Objects.requireNonNull(p2.get("longitude"))).doubleValue();
+
+                            LatLng l1 = new LatLng(lat1, lng1);
+                            LatLng l2 = new LatLng(lat2, lng2);
+
+                            String terrain = (String) p1.get("terrain_type");
+                            int color = getTerrainColor(terrain);
+
+                            Polyline polyline = mMap.addPolyline(new PolylineOptions()
+                                    .add(l1, l2).color(color).width(15));
+                            myPathPolylines.add(polyline);
+                            builder.include(l1);
+                            builder.include(l2);
+                        } catch (Exception e) {
+                            Log.e("Map", "Napaka pri risanju segmenta poti", e);
+                        }
+                    }
+
+                    try {
+                        mMap.animateCamera(CameraUpdateFactory.newLatLngBounds(builder.build(), 100));
+                    } catch (IllegalStateException e) {
+                        Log.e("Map", "Camera bounds animation failed", e);
+                    }
+                })
+                .addOnFailureListener(e ->
+                        Toast.makeText(this, "Napaka pri nalaganju poti.", Toast.LENGTH_SHORT).show());
+    }
+
+    private void clearMyPathPolylines() {
+        for (Polyline p : myPathPolylines) p.remove();
+        myPathPolylines.clear();
+    }
+
+    private int getTerrainColor(String terrain) {
+        SharedPreferences prefs = getSharedPreferences(SettingsActivity.PREFS_NAME, MODE_PRIVATE);
+        boolean colorblind = prefs.getBoolean(SettingsActivity.KEY_COLORBLIND, false);
+
+        if ("Smooth".equals(terrain)) {
+            return colorblind
+                    ? Color.argb(180, 30, 144, 255)  // modra
+                    : Color.argb(180, 76, 175, 80);  // zelena
+        } else if ("Tough".equals(terrain)) {
+            return colorblind
+                    ? Color.argb(180, 255, 140, 0)   // oranžna
+                    : Color.argb(180, 244, 67, 54);  // rdeča
+        } else {
+            return Color.argb(120, 128, 128, 128);   // siva
+        }
+    }
+
+    private void applyFontSizeSettings() {
+        SharedPreferences prefs = getSharedPreferences(SettingsActivity.PREFS_NAME, MODE_PRIVATE);
+        String fontSize = prefs.getString(SettingsActivity.KEY_FONT_SIZE, SettingsActivity.FONT_MEDIUM);
+
+        float sp;
+        switch (fontSize) {
+            case SettingsActivity.FONT_SMALL: sp = 11f; break;
+            case SettingsActivity.FONT_LARGE: sp = 16f; break;
+            default:                          sp = 13f; break;
+        }
+
+        recordButton.setTextSize(sp);
+        communityButton.setTextSize(sp);
+        profileButton.setTextSize(sp);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        applyFontSizeSettings();
+        if (isRecording && accelerometer != null) {
+            sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_GAME);
+        }
+    }
+
 
     private void toggleCommunityMap() {
         if (!isShowingCommunity) {
@@ -190,24 +316,19 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     private void fetchCommunityPaths() {
         communityButton.setEnabled(false);
         communityButton.setText("Loading...");
-        
         db.collection("recorded_paths")
                 .whereEqualTo("is_public", true)
                 .get()
                 .addOnSuccessListener(queryDocumentSnapshots -> {
                     clearCommunityPaths();
-                    Log.d("Firebase", "Fetched " + queryDocumentSnapshots.size() + " community paths");
-                    
                     if (queryDocumentSnapshots.isEmpty()) {
                         Toast.makeText(this, "No community paths found.", Toast.LENGTH_SHORT).show();
                         communityButton.setText("Show Community");
                         communityButton.setEnabled(true);
                         return;
                     }
-
                     LatLngBounds.Builder builder = new LatLngBounds.Builder();
                     boolean hasPoints = false;
-
                     for (QueryDocumentSnapshot document : queryDocumentSnapshots) {
                         List<Map<String, Object>> path = (List<Map<String, Object>>) document.get("path");
                         if (path != null && path.size() >= 2) {
@@ -222,23 +343,20 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                             }
                         }
                     }
-
                     if (hasPoints && mMap != null) {
                         try {
                             mMap.animateCamera(CameraUpdateFactory.newLatLngBounds(builder.build(), 100));
                         } catch (IllegalStateException e) {
-                            // Map might not have layout yet
                             Log.e("Map", "Camera bounds animation failed", e);
                         }
                     }
-
                     communityButton.setText("Hide Community");
                     communityButton.setEnabled(true);
                     isShowingCommunity = true;
                 })
                 .addOnFailureListener(e -> {
                     Log.e("Firebase", "Error fetching community paths", e);
-                    Toast.makeText(this, "Fetching failed. Check Logcat for details.", Toast.LENGTH_LONG).show();
+                    Toast.makeText(this, "Fetching failed.", Toast.LENGTH_LONG).show();
                     communityButton.setEnabled(true);
                     communityButton.setText("Show Community");
                 });
@@ -248,29 +366,19 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         if (mMap == null) return;
         List<Map<String, Object>> path = (List<Map<String, Object>>) data.get("path");
         if (path == null || path.size() < 2) return;
-
         for (int i = 0; i < path.size() - 1; i++) {
             Map<String, Object> p1 = path.get(i);
             Map<String, Object> p2 = path.get(i + 1);
-            
             try {
                 double lat1 = ((Number) Objects.requireNonNull(p1.get("latitude"))).doubleValue();
                 double lng1 = ((Number) Objects.requireNonNull(p1.get("longitude"))).doubleValue();
                 double lat2 = ((Number) Objects.requireNonNull(p2.get("latitude"))).doubleValue();
                 double lng2 = ((Number) Objects.requireNonNull(p2.get("longitude"))).doubleValue();
-
-                LatLng l1 = new LatLng(lat1, lng1);
-                LatLng l2 = new LatLng(lat2, lng2);
-                
                 String terrain = (String) p1.get("terrain_type");
-                int color = Color.argb(120, 128, 128, 128); 
-                if ("Smooth".equals(terrain)) color = Color.argb(120, 76, 175, 80);
-                else if ("Tough".equals(terrain)) color = Color.argb(120, 244, 67, 54);
-
+                int color = getTerrainColor(terrain);
                 Polyline polyline = mMap.addPolyline(new PolylineOptions()
-                        .add(l1, l2)
-                        .color(color)
-                        .width(10));
+                        .add(new LatLng(lat1, lng1), new LatLng(lat2, lng2))
+                        .color(color).width(10));
                 communityPolylines.add(polyline);
             } catch (Exception e) {
                 Log.e("Map", "Error parsing path segment", e);
@@ -279,71 +387,8 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     }
 
     private void clearCommunityPaths() {
-        for (Polyline p : communityPolylines) {
-            p.remove();
-        }
+        for (Polyline p : communityPolylines) p.remove();
         communityPolylines.clear();
-    }
-
-    private void showMyPathsDialog() {
-        db.collection("recorded_paths")
-                .whereEqualTo("user_id", userId)
-                .get()
-                .addOnSuccessListener(queryDocumentSnapshots -> {
-                    List<String> pathNames = new ArrayList<>();
-                    List<String> docIds = new ArrayList<>();
-                    SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault());
-
-                    if (queryDocumentSnapshots.isEmpty()) {
-                        Toast.makeText(this, "No paths found.", Toast.LENGTH_SHORT).show();
-                        return;
-                    }
-
-                    for (QueryDocumentSnapshot doc : queryDocumentSnapshots) {
-                        Timestamp ts = doc.getTimestamp("start_time");
-                        if (ts != null) {
-                            Boolean isPublic = doc.getBoolean("is_public");
-                            String status = Boolean.TRUE.equals(isPublic) ? " 🌍 Public" : " 🔒 Private";
-                            pathNames.add("Path from " + sdf.format(ts.toDate()) + status);
-                            docIds.add(doc.getId());
-                        }
-                    }
-
-                    new AlertDialog.Builder(this)
-                            .setTitle("My Paths")
-                            .setItems(pathNames.toArray(new String[0]), (dialog, which) -> {
-                                confirmPublishDialog(docIds.get(which), pathNames.get(which));
-                            })
-                            .setNeutralButton("Sign Out", (dialog, which) -> signOutUser())
-                            .setNegativeButton("Close", null)
-                            .show();
-                })
-                .addOnFailureListener(e -> Log.e("Firebase", "Error fetching my paths", e));
-    }
-
-    private void signOutUser() {
-        mAuth.signOut();
-        startActivity(new Intent(MainActivity.this, LoginActivity.class));
-        finish();
-    }
-
-    private void confirmPublishDialog(String docId, String pathName) {
-        new AlertDialog.Builder(this)
-                .setTitle("Publish Path")
-                .setMessage("Do you want to upload \"" + pathName + "\" to the community map?")
-                .setPositiveButton("Upload", (dialog, which) -> sharePath(docId))
-                .setNegativeButton("Cancel", null)
-                .show();
-    }
-
-    private void sharePath(String docId) {
-        db.collection("recorded_paths").document(docId)
-                .update("is_public", true)
-                .addOnSuccessListener(aVoid -> {
-                    Toast.makeText(this, "Path shared with community!", Toast.LENGTH_SHORT).show();
-                    if (isShowingCommunity) fetchCommunityPaths();
-                })
-                .addOnFailureListener(e -> Log.e("Firebase", "Error sharing path", e));
     }
 
     private void showSecurePhoneDialog() {
@@ -351,15 +396,13 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                 .setTitle("Secure Phone")
                 .setMessage("Put your phone in a secure place on the wheelchair where it doesn't move around.")
                 .setPositiveButton("OK", (dialog, which) -> startCountdown())
-                .setCancelable(false)
-                .show();
+                .setCancelable(false).show();
     }
 
     private void startCountdown() {
         recordButton.setBackgroundTintList(ColorStateList.valueOf(Color.RED));
         recordButton.setEnabled(false);
         final int[] secondsLeft = {5};
-        
         Handler countdownHandler = new Handler(Looper.getMainLooper());
         Runnable countdownRunnable = new Runnable() {
             @Override
@@ -384,14 +427,13 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         startTimestamp = Timestamp.now();
         currentRunId = UUID.randomUUID().toString();
         timerHandler.postDelayed(timerRunnable, 0);
-        
         Arrays.fill(inputBuffer, 0);
         inferenceCounter = 0;
         recentTerrains.clear();
         currentRunPath.clear();
-        
         if (mMap != null) mMap.clear();
-        if (isShowingCommunity) clearCommunityPaths();
+        clearCommunityPaths();
+        clearMyPathPolylines();
         isShowingCommunity = false;
         communityButton.setText("Show Community");
         if (accelerometer != null) {
@@ -406,7 +448,6 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         recordButton.setBackgroundTintList(ColorStateList.valueOf(Color.parseColor("#388E3C")));
         recordButton.setText("Start Recording");
         timerText.setText("00:00");
-
         showUploadOptionsDialog();
     }
 
@@ -415,19 +456,17 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             Toast.makeText(this, "No valid path data to save.", Toast.LENGTH_SHORT).show();
             return;
         }
-
         String[] options = {"Upload to Community", "Save Privately", "Discard"};
         new AlertDialog.Builder(this)
                 .setTitle("Recording Finished")
                 .setItems(options, (dialog, which) -> {
                     switch (which) {
-                        case 0: uploadRunToFirebase(true); break;
+                        case 0: uploadRunToFirebase(true);  break;
                         case 1: uploadRunToFirebase(false); break;
                         case 2: Toast.makeText(this, "Discarded", Toast.LENGTH_SHORT).show(); break;
                     }
                 })
-                .setCancelable(false)
-                .show();
+                .setCancelable(false).show();
     }
 
     private void uploadRunToFirebase(boolean isPublic) {
@@ -437,13 +476,11 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         runData.put("start_time", startTimestamp);
         runData.put("path", new ArrayList<>(currentRunPath));
         runData.put("is_public", isPublic);
-
-        db.collection("recorded_paths")
-                .add(runData)
-                .addOnSuccessListener(documentReference -> 
-                    Toast.makeText(MainActivity.this, isPublic ? "Path synced to Community!" : "Path saved privately!", Toast.LENGTH_SHORT).show())
-                .addOnFailureListener(e -> 
-                    Log.e("Firebase", "Error saving run", e));
+        db.collection("recorded_paths").add(runData)
+                .addOnSuccessListener(d -> Toast.makeText(MainActivity.this,
+                        isPublic ? "Path synced to Community!" : "Path saved privately!",
+                        Toast.LENGTH_SHORT).show())
+                .addOnFailureListener(e -> Log.e("Firebase", "Error saving run", e));
     }
 
     private void setupLocationUpdates() {
@@ -452,14 +489,11 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             public void onLocationResult(@NonNull LocationResult locationResult) {
                 for (Location location : locationResult.getLocations()) {
                     LatLng currentLatLng = new LatLng(location.getLatitude(), location.getLongitude());
-                    
                     if (isFirstLocationUpdate && mMap != null) {
                         mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(currentLatLng, 19f));
                         isFirstLocationUpdate = false;
                     }
-
                     if (isRecording && lastLatLng != null && mMap != null) {
-                        //fixing GPS drift
                         if (location.hasAccuracy() && location.getAccuracy() > 15f) {
                             lastLatLng = currentLatLng;
                             return;
@@ -470,10 +504,8 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                         if (dist[0] < 2.0f) return;
                         mMap.addPolyline(new PolylineOptions()
                                 .add(lastLatLng, currentLatLng)
-                                .color(lastClassificationColor)
-                                .width(15));
+                                .color(lastClassificationColor).width(15));
                         mMap.animateCamera(CameraUpdateFactory.newLatLng(currentLatLng));
-
                         if (!"Idle".equals(lastClassificationLabel)) {
                             Map<String, Object> point = new HashMap<>();
                             point.put("latitude", location.getLatitude());
@@ -493,17 +525,18 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     public void onMapReady(@NonNull GoogleMap googleMap) {
         mMap = googleMap;
         mMap.setMapType(GoogleMap.MAP_TYPE_NORMAL);
-        
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, 1);
+        if (ActivityCompat.checkSelfPermission(this,
+                Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this,
+                    new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, 1);
             return;
         }
-        
         enableMapFeatures();
     }
 
     private void enableMapFeatures() {
-        if (mMap != null && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+        if (mMap != null && ActivityCompat.checkSelfPermission(this,
+                Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
             mMap.setMyLocationEnabled(true);
             mMap.getUiSettings().setMyLocationButtonEnabled(true);
             startLocationUpdates();
@@ -511,24 +544,25 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     }
 
     private void startLocationUpdates() {
-        LocationRequest locationRequest = new LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 500)
-                .setMinUpdateIntervalMillis(250)
-                .build();
-
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-            fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback, Looper.getMainLooper());
+        LocationRequest locationRequest = new LocationRequest.Builder(
+                Priority.PRIORITY_HIGH_ACCURACY, 500)
+                .setMinUpdateIntervalMillis(250).build();
+        if (ActivityCompat.checkSelfPermission(this,
+                Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+            fusedLocationClient.requestLocationUpdates(locationRequest,
+                    locationCallback, Looper.getMainLooper());
         }
     }
 
     @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
+                                           @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == 1) {
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                enableMapFeatures();
-            } else {
-                Toast.makeText(this, "Permission denied.", Toast.LENGTH_LONG).show();
-            }
+        if (requestCode == 1 && grantResults.length > 0
+                && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            enableMapFeatures();
+        } else {
+            Toast.makeText(this, "Permission denied.", Toast.LENGTH_LONG).show();
         }
     }
 
@@ -540,7 +574,6 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             inputBuffer[inputBuffer.length - 3] = event.values[0];
             inputBuffer[inputBuffer.length - 2] = event.values[1];
             inputBuffer[inputBuffer.length - 1] = event.values[2];
-
             inferenceCounter++;
             if (inferenceCounter >= INFERENCE_INTERVAL_SAMPLES) {
                 final float[] bufferCopy = inputBuffer.clone();
@@ -556,30 +589,24 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             int maxIdx = 0;
             float maxVal = -1;
             for (int i = 0; i < results.length; i++) {
-                if (results[i] > maxVal) {
-                    maxVal = results[i];
-                    maxIdx = i;
-                }
+                if (results[i] > maxVal) { maxVal = results[i]; maxIdx = i; }
             }
-
             Terrain detected;
             switch (maxIdx) {
                 case 1: detected = Terrain.SMOOTH; break;
-                case 2: detected = Terrain.TOUGH; break;
+                case 2: detected = Terrain.TOUGH;  break;
                 default: detected = Terrain.IDLE;
             }
-
             synchronized (recentTerrains) {
                 recentTerrains.add(detected);
-                if (recentTerrains.size() > SMOOTHING_WINDOW_SIZE) {
-                    recentTerrains.removeFirst();
-                }
-                Terrain smoothedTerrain = getMostFrequent(recentTerrains);
-                lastClassificationColor = smoothedTerrain.color;
-                lastClassificationLabel = smoothedTerrain.label;
-                final String label = smoothedTerrain.label;
+                if (recentTerrains.size() > SMOOTHING_WINDOW_SIZE) recentTerrains.removeFirst();
+                Terrain smoothed = getMostFrequent(recentTerrains);
+                lastClassificationColor = getTerrainColor(smoothed.label); // NOVO
+                lastClassificationLabel = smoothed.label;
+                final String label = smoothed.label;
                 final float confidence = maxVal;
-                runOnUiThread(() -> statusText.setText(String.format(Locale.US, "%s %.2f", label, confidence)));
+                runOnUiThread(() ->
+                        statusText.setText(String.format(Locale.US, "%s %.2f", label, confidence)));
             }
         }
     }
@@ -590,32 +617,17 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         int maxCount = 0;
         for (Terrain t : Terrain.values()) {
             int count = Collections.frequency(list, t);
-            if (count > maxCount) {
-                maxCount = count;
-                winner = t;
-            }
+            if (count > maxCount) { maxCount = count; winner = t; }
         }
         return winner;
     }
 
-    @Override
-    public void onAccuracyChanged(Sensor sensor, int accuracy) {}
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-        if (isRecording && accelerometer != null) {
-            sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_GAME);
-        }
-    }
-
+    @Override public void onAccuracyChanged(Sensor sensor, int accuracy) {}
 
     @Override
     protected void onPause() {
         super.onPause();
-        if (isRecording) {
-            sensorManager.unregisterListener(this);
-        }
+        if (isRecording) sensorManager.unregisterListener(this);
     }
 
     @Override
@@ -624,9 +636,6 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         inferenceExecutor.shutdown();
     }
 
-    static {
-        System.loadLibrary("ruker");
-    }
-
+    static { System.loadLibrary("ruker"); }
     public native float[] classify(float[] input);
 }
