@@ -24,33 +24,31 @@
         android:orientation="vertical"
         android:layout_marginTop="64dp"
         android:layout_marginEnd="16dp"
+        android:gravity="end"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintTop_toTopOf="parent">
 
         <com.google.android.material.button.MaterialButton
-            android:id="@+id/communityButton"
-            style="@style/Widget.MaterialComponents.Button.Icon"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
+            android:id="@+id/profileButton"
+            style="@style/Widget.Material3.Button.IconButton"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
             android:backgroundTint="#80000000"
-            android:text="@string/show_community"
-            android:textColor="@android:color/white"
-            android:textSize="12sp"
-            app:cornerRadius="20dp"
-            app:icon="@android:drawable/ic_menu_mylocation" />
+            app:icon="@android:drawable/ic_menu_myplaces"
+            app:iconSize="24dp"
+            app:iconTint="@android:color/white" />
 
         <com.google.android.material.button.MaterialButton
-            android:id="@+id/myPathsButton"
-            style="@style/Widget.MaterialComponents.Button.Icon"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:id="@+id/communityButton"
+            style="@style/Widget.Material3.Button.IconButton"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
             android:layout_marginTop="8dp"
             android:backgroundTint="#80000000"
-            android:text="@string/my_paths"
-            android:textColor="@android:color/white"
-            android:textSize="12sp"
-            app:cornerRadius="20dp"
-            app:icon="@android:drawable/ic_menu_save" />
+            app:icon="@android:drawable/ic_menu_mylocation"
+            app:iconSize="24dp"
+            app:iconTint="@android:color/white" />
+
     </LinearLayout>
 
     <!-- Terrain Label & Confidence -->
