@@ -4,7 +4,7 @@
 #include "edge-impulse-sdk/classifier/ei_run_classifier.h"
 
 extern "C" JNIEXPORT jfloatArray JNICALL
-Java_com_example_ruker_MainActivity_classify(
+Java_com_example_ruker_TerrainClassifier_classify(
         JNIEnv* env,
         jobject /* this */,
         jfloatArray input_features) {

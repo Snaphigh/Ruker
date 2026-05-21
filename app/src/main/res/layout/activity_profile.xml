@@ -4,55 +4,56 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="24dp"
     android:background="?attr/colorSurface">
 
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/profileToolbar"
+        android:layout_width="match_parent"
+        android:layout_height="?attr/actionBarSize"
+        android:background="?attr/colorSurface"
+        app:title="@string/profile"
+        app:navigationIcon="?attr/homeAsUpIndicator" />
 
-    <TextView
-        android:layout_width="wrap_content"
+    <LinearLayout
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
-        android:layout_marginBottom="40dp"
-        android:text="Profil"
-        android:textSize="28sp"
-        android:textStyle="bold" />
+        android:orientation="vertical"
+        android:padding="24dp">
 
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/settingsButton"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:layout_marginBottom="16dp"
+            android:text="@string/settings"
+            android:textSize="16sp"
+            app:cornerRadius="12dp"
+            app:icon="@android:drawable/ic_menu_preferences" />
 
-    <com.google.android.material.button.MaterialButton
-        android:id="@+id/settingsButton"
-        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-        android:layout_width="match_parent"
-        android:layout_height="56dp"
-        android:layout_marginBottom="16dp"
-        android:text="Nastavitve"
-        android:textSize="16sp"
-        app:cornerRadius="12dp"
-        app:icon="@android:drawable/ic_menu_preferences" />
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/myPathsButton"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:layout_marginBottom="16dp"
+            android:text="@string/my_paths"
+            android:textSize="16sp"
+            app:cornerRadius="12dp"
+            app:icon="@android:drawable/ic_menu_save" />
 
-
-    <com.google.android.material.button.MaterialButton
-        android:id="@+id/myPathsButton"
-        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-        android:layout_width="match_parent"
-        android:layout_height="56dp"
-        android:layout_marginBottom="16dp"
-        android:text="My Paths"
-        android:textSize="16sp"
-        app:cornerRadius="12dp"
-        app:icon="@android:drawable/ic_menu_save" />
-
-
-    <com.google.android.material.button.MaterialButton
-        android:id="@+id/signOutButton"
-        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-        android:layout_width="match_parent"
-        android:layout_height="56dp"
-        android:text="Sign Out"
-        android:textColor="#F44336"
-        android:textSize="16sp"
-        app:cornerRadius="12dp"
-        app:icon="@android:drawable/ic_lock_power_off"
-        app:iconTint="#F44336"
-        app:strokeColor="#F44336" />
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/signOutButton"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:text="@string/sign_out"
+            android:textColor="#F44336"
+            android:textSize="16sp"
+            app:cornerRadius="12dp"
+            app:icon="@android:drawable/ic_lock_power_off"
+            app:iconTint="#F44336"
+            app:strokeColor="#F44336" />
+    </LinearLayout>
 
 </LinearLayout>

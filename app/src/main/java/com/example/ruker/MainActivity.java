@@ -1,16 +1,11 @@
 package com.example.ruker;
 
 import android.Manifest;
-import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
-import android.hardware.Sensor;
-import android.hardware.SensorEvent;
-import android.hardware.SensorEventListener;
-import android.hardware.SensorManager;
 import android.location.Location;
 import android.os.Bundle;
 import android.os.Handler;
@@ -48,19 +43,13 @@ import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.QueryDocumentSnapshot;
 
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.UUID;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
-public class MainActivity extends AppCompatActivity implements OnMapReadyCallback, SensorEventListener {
+public class MainActivity extends AppCompatActivity implements OnMapReadyCallback, SharedPreferences.OnSharedPreferenceChangeListener {
 
     private GoogleMap mMap;
     private FusedLocationProviderClient fusedLocationClient;
@@ -68,27 +57,15 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     private LatLng lastLatLng;
     private boolean isFirstLocationUpdate = true;
 
-    private SensorManager sensorManager;
-    private Sensor accelerometer;
-
-    private static final int RAW_SAMPLE_COUNT = 125;
-    private static final int SAMPLES_PER_FRAME = 3;
-    private final float[] inputBuffer = new float[RAW_SAMPLE_COUNT * SAMPLES_PER_FRAME];
-
-    private final ExecutorService inferenceExecutor = Executors.newSingleThreadExecutor();
-    private int inferenceCounter = 0;
-    private static final int INFERENCE_INTERVAL_SAMPLES = 8;
+    private TerrainClassifier terrainClassifier;
+    private int lastClassificationColor = Color.GRAY;
+    private String lastClassificationLabel = "Idle";
 
     private TextView statusText;
     private TextView timerText;
     private MaterialButton recordButton;
     private MaterialButton communityButton;
-
-
     private MaterialButton profileButton;
-
-    private volatile int lastClassificationColor = Color.GRAY;
-    private volatile String lastClassificationLabel = "Idle";
 
     private FirebaseFirestore db;
     private FirebaseAuth mAuth;
@@ -97,10 +74,10 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     private boolean isRecording = false;
     private boolean isShowingCommunity = false;
     private String currentRunId;
+    private String lastLoadedDocId;
     private Timestamp startTimestamp;
     private final List<Map<String, Object>> currentRunPath = new ArrayList<>();
     private final List<Polyline> communityPolylines = new ArrayList<>();
-
     private final List<Polyline> myPathPolylines = new ArrayList<>();
 
     private long startTime = 0L;
@@ -116,18 +93,6 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             timerHandler.postDelayed(this, 500);
         }
     };
-
-    enum Terrain {
-        IDLE("Idle"),
-        SMOOTH("Smooth"),
-        TOUGH("Tough");
-
-        final String label;
-        Terrain(String label) { this.label = label; }
-    }
-
-    private static final int SMOOTHING_WINDOW_SIZE = 3;
-    private final LinkedList<Terrain> recentTerrains = new LinkedList<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -146,11 +111,11 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         userId = currentUser.getUid();
         db = FirebaseFirestore.getInstance();
 
-        statusText      = findViewById(R.id.statusText);
-        timerText       = findViewById(R.id.timerText);
-        recordButton    = findViewById(R.id.recordButton);
+        statusText = findViewById(R.id.statusText);
+        timerText = findViewById(R.id.timerText);
+        recordButton = findViewById(R.id.recordButton);
         communityButton = findViewById(R.id.communityButton);
-        profileButton   = findViewById(R.id.profileButton); // NOVO
+        profileButton = findViewById(R.id.profileButton);
 
         SupportMapFragment mapFragment = (SupportMapFragment) getSupportFragmentManager()
                 .findFragmentById(R.id.map);
@@ -161,17 +126,15 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
         setupLocationUpdates();
 
-        sensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
-        if (sensorManager != null) {
-            accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
-        }
+        terrainClassifier = new TerrainClassifier(this, (label, color, confidence) -> {
+            lastClassificationLabel = label;
+            lastClassificationColor = SettingsActivity.getTerrainColor(this, label);
+            runOnUiThread(() -> statusText.setText(label));
+        });
 
         recordButton.setOnClickListener(v -> {
-            if (!isRecording) {
-                showSecurePhoneDialog();
-            } else {
-                stopRecording();
-            }
+            if (!isRecording) showSecurePhoneDialog();
+            else stopRecording();
         });
 
         communityButton.setOnClickListener(v -> toggleCommunityMap());
@@ -181,78 +144,67 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             startActivityForResult(intent, MyPathsActivity.REQUEST_SHOW_PATH);
         });
 
-        applyFontSizeSettings(); // NOVO
+        SettingsActivity.applyFontSize(this, recordButton, statusText, timerText);
+        
+        getSharedPreferences(SettingsActivity.PREFS_NAME, MODE_PRIVATE)
+                .registerOnSharedPreferenceChangeListener(this);
+    }
+
+    @Override
+    public void onSharedPreferenceChanged(SharedPreferences sharedPreferences, String key) {
+        if (SettingsActivity.KEY_COLORBLIND.equals(key)) {
+            runOnUiThread(() -> {
+                if (isShowingCommunity) {
+                    // Re-draw community paths to update styles instantly
+                    fetchCommunityPaths();
+                }
+                if (lastLoadedDocId != null) {
+                    // Re-draw last loaded path to update styles instantly
+                    loadAndShowPathOnMap(lastLoadedDocId);
+                }
+            });
+        } else if (SettingsActivity.KEY_FONT_SIZE.equals(key)) {
+            SettingsActivity.applyFontSize(this, recordButton, statusText, timerText);
+        }
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-
-        if (requestCode == MyPathsActivity.REQUEST_SHOW_PATH
-                && resultCode == RESULT_OK
-                && data != null) {
+        if (requestCode == MyPathsActivity.REQUEST_SHOW_PATH && resultCode == RESULT_OK && data != null) {
             String docId = data.getStringExtra(MyPathsActivity.EXTRA_PATH_DOC_ID);
-            if (docId != null) {
-                loadAndShowPathOnMap(docId);
-            }
+            if (docId != null) loadAndShowPathOnMap(docId);
         }
     }
 
     private void loadAndShowPathOnMap(String docId) {
-        db.collection("recorded_paths")
-                .document(docId)
-                .get()
-                .addOnSuccessListener(documentSnapshot -> {
-                    if (!documentSnapshot.exists()) {
-                        Toast.makeText(this, "Pot ni bila najdena.", Toast.LENGTH_SHORT).show();
-                        return;
-                    }
+        lastLoadedDocId = docId;
+        db.collection("recorded_paths").document(docId).get().addOnSuccessListener(documentSnapshot -> {
+            if (!documentSnapshot.exists()) {
+                Toast.makeText(this, R.string.path_not_found, Toast.LENGTH_SHORT).show();
+                return;
+            }
+            clearMyPathPolylines();
+            List<Map<String, Object>> path = (List<Map<String, Object>>) documentSnapshot.get("path");
+            if (path == null || path.size() < 2) {
+                Toast.makeText(this, R.string.insufficient_points, Toast.LENGTH_SHORT).show();
+                return;
+            }
 
-                    clearMyPathPolylines();
-
-                    List<Map<String, Object>> path =
-                            (List<Map<String, Object>>) documentSnapshot.get("path");
-
-                    if (path == null || path.size() < 2) {
-                        Toast.makeText(this, "Pot nima dovolj točk.", Toast.LENGTH_SHORT).show();
-                        return;
-                    }
-
-                    LatLngBounds.Builder builder = new LatLngBounds.Builder();
-
-                    for (int i = 0; i < path.size() - 1; i++) {
-                        Map<String, Object> p1 = path.get(i);
-                        Map<String, Object> p2 = path.get(i + 1);
-                        try {
-                            double lat1 = ((Number) Objects.requireNonNull(p1.get("latitude"))).doubleValue();
-                            double lng1 = ((Number) Objects.requireNonNull(p1.get("longitude"))).doubleValue();
-                            double lat2 = ((Number) Objects.requireNonNull(p2.get("latitude"))).doubleValue();
-                            double lng2 = ((Number) Objects.requireNonNull(p2.get("longitude"))).doubleValue();
-
-                            LatLng l1 = new LatLng(lat1, lng1);
-                            LatLng l2 = new LatLng(lat2, lng2);
-
-                            String terrain = (String) p1.get("terrain_type");
-                            int color = getTerrainColor(terrain);
-
-                            Polyline polyline = mMap.addPolyline(new PolylineOptions()
-                                    .add(l1, l2).color(color).width(15));
-                            myPathPolylines.add(polyline);
-                            builder.include(l1);
-                            builder.include(l2);
-                        } catch (Exception e) {
-                            Log.e("Map", "Napaka pri risanju segmenta poti", e);
-                        }
-                    }
-
-                    try {
-                        mMap.animateCamera(CameraUpdateFactory.newLatLngBounds(builder.build(), 100));
-                    } catch (IllegalStateException e) {
-                        Log.e("Map", "Camera bounds animation failed", e);
-                    }
-                })
-                .addOnFailureListener(e ->
-                        Toast.makeText(this, "Napaka pri nalaganju poti.", Toast.LENGTH_SHORT).show());
+            for (int i = 0; i < path.size() - 1; i++) {
+                Map<String, Object> p1 = path.get(i);
+                Map<String, Object> p2 = path.get(i + 1);
+                try {
+                    LatLng l1 = new LatLng(((Number) p1.get("latitude")).doubleValue(), ((Number) p1.get("longitude")).doubleValue());
+                    LatLng l2 = new LatLng(((Number) p2.get("latitude")).doubleValue(), ((Number) p2.get("longitude")).doubleValue());
+                    String terrain = (String) p1.get("terrain_type");
+                    
+                    myPathPolylines.add(mMap.addPolyline(new PolylineOptions().add(l1, l2).width(15)
+                            .color(SettingsActivity.getTerrainColor(this, terrain))
+                            .pattern(SettingsActivity.getTerrainPattern(this, terrain))));
+                } catch (Exception e) { Log.e("Map", "Error drawing path", e); }
+            }
+        });
     }
 
     private void clearMyPathPolylines() {
@@ -260,129 +212,65 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         myPathPolylines.clear();
     }
 
-    private int getTerrainColor(String terrain) {
-        SharedPreferences prefs = getSharedPreferences(SettingsActivity.PREFS_NAME, MODE_PRIVATE);
-        boolean colorblind = prefs.getBoolean(SettingsActivity.KEY_COLORBLIND, false);
-
-        if ("Smooth".equals(terrain)) {
-            return colorblind
-                    ? Color.argb(180, 30, 144, 255)  // modra
-                    : Color.argb(180, 76, 175, 80);  // zelena
-        } else if ("Tough".equals(terrain)) {
-            return colorblind
-                    ? Color.argb(180, 255, 140, 0)   // oranžna
-                    : Color.argb(180, 244, 67, 54);  // rdeča
-        } else {
-            return Color.argb(120, 128, 128, 128);   // siva
-        }
-    }
-
-    private void applyFontSizeSettings() {
-        SharedPreferences prefs = getSharedPreferences(SettingsActivity.PREFS_NAME, MODE_PRIVATE);
-        String fontSize = prefs.getString(SettingsActivity.KEY_FONT_SIZE, SettingsActivity.FONT_MEDIUM);
-
-        float sp;
-        switch (fontSize) {
-            case SettingsActivity.FONT_SMALL: sp = 11f; break;
-            case SettingsActivity.FONT_LARGE: sp = 16f; break;
-            default:                          sp = 13f; break;
-        }
-
-        recordButton.setTextSize(sp);
-        communityButton.setTextSize(sp);
-        profileButton.setTextSize(sp);
-    }
-
     @Override
     protected void onResume() {
         super.onResume();
-        applyFontSizeSettings();
-        if (isRecording && accelerometer != null) {
-            sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_GAME);
-        }
+        SettingsActivity.applyFontSize(this, recordButton, statusText, timerText);
+        if (isRecording) terrainClassifier.start();
     }
 
+    @Override
+    protected void onPause() {
+        super.onPause();
+        terrainClassifier.stop();
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        getSharedPreferences(SettingsActivity.PREFS_NAME, MODE_PRIVATE)
+                .unregisterOnSharedPreferenceChangeListener(this);
+        terrainClassifier.shutdown();
+    }
 
     private void toggleCommunityMap() {
-        if (!isShowingCommunity) {
-            fetchCommunityPaths();
-        } else {
+        if (!isShowingCommunity) fetchCommunityPaths();
+        else {
             clearCommunityPaths();
-            communityButton.setText("Show Community");
             isShowingCommunity = false;
+            Toast.makeText(this, R.string.community_hidden, Toast.LENGTH_SHORT).show();
         }
     }
 
     private void fetchCommunityPaths() {
         communityButton.setEnabled(false);
-        communityButton.setText("Loading...");
-        db.collection("recorded_paths")
-                .whereEqualTo("is_public", true)
-                .get()
-                .addOnSuccessListener(queryDocumentSnapshots -> {
-                    clearCommunityPaths();
-                    if (queryDocumentSnapshots.isEmpty()) {
-                        Toast.makeText(this, "No community paths found.", Toast.LENGTH_SHORT).show();
-                        communityButton.setText("Show Community");
-                        communityButton.setEnabled(true);
-                        return;
-                    }
-                    LatLngBounds.Builder builder = new LatLngBounds.Builder();
-                    boolean hasPoints = false;
-                    for (QueryDocumentSnapshot document : queryDocumentSnapshots) {
-                        List<Map<String, Object>> path = (List<Map<String, Object>>) document.get("path");
-                        if (path != null && path.size() >= 2) {
-                            drawPathFromData(document.getData());
-                            for (Map<String, Object> point : path) {
-                                try {
-                                    double lat = ((Number) point.get("latitude")).doubleValue();
-                                    double lng = ((Number) point.get("longitude")).doubleValue();
-                                    builder.include(new LatLng(lat, lng));
-                                    hasPoints = true;
-                                } catch (Exception ignored) {}
-                            }
-                        }
-                    }
-                    if (hasPoints && mMap != null) {
-                        try {
-                            mMap.animateCamera(CameraUpdateFactory.newLatLngBounds(builder.build(), 100));
-                        } catch (IllegalStateException e) {
-                            Log.e("Map", "Camera bounds animation failed", e);
-                        }
-                    }
-                    communityButton.setText("Hide Community");
-                    communityButton.setEnabled(true);
-                    isShowingCommunity = true;
-                })
-                .addOnFailureListener(e -> {
-                    Log.e("Firebase", "Error fetching community paths", e);
-                    Toast.makeText(this, "Fetching failed.", Toast.LENGTH_LONG).show();
-                    communityButton.setEnabled(true);
-                    communityButton.setText("Show Community");
-                });
+        Toast.makeText(this, R.string.loading_community, Toast.LENGTH_SHORT).show();
+        
+        db.collection("recorded_paths").whereEqualTo("is_public", true).get().addOnSuccessListener(snapshots -> {
+            clearCommunityPaths();
+            for (QueryDocumentSnapshot doc : snapshots) {
+                drawPathFromData(doc.getData());
+            }
+            communityButton.setEnabled(true);
+            isShowingCommunity = true;
+        }).addOnFailureListener(e -> communityButton.setEnabled(true));
     }
 
     private void drawPathFromData(Map<String, Object> data) {
-        if (mMap == null) return;
         List<Map<String, Object>> path = (List<Map<String, Object>>) data.get("path");
-        if (path == null || path.size() < 2) return;
+        if (path == null) return;
         for (int i = 0; i < path.size() - 1; i++) {
             Map<String, Object> p1 = path.get(i);
             Map<String, Object> p2 = path.get(i + 1);
             try {
-                double lat1 = ((Number) Objects.requireNonNull(p1.get("latitude"))).doubleValue();
-                double lng1 = ((Number) Objects.requireNonNull(p1.get("longitude"))).doubleValue();
-                double lat2 = ((Number) Objects.requireNonNull(p2.get("latitude"))).doubleValue();
-                double lng2 = ((Number) Objects.requireNonNull(p2.get("longitude"))).doubleValue();
-                String terrain = (String) p1.get("terrain_type");
-                int color = getTerrainColor(terrain);
-                Polyline polyline = mMap.addPolyline(new PolylineOptions()
-                        .add(new LatLng(lat1, lng1), new LatLng(lat2, lng2))
-                        .color(color).width(10));
-                communityPolylines.add(polyline);
-            } catch (Exception e) {
-                Log.e("Map", "Error parsing path segment", e);
-            }
+                LatLng l1 = new LatLng(((Number) p1.get("latitude")).doubleValue(), ((Number) p1.get("longitude")).doubleValue());
+                LatLng l2 = new LatLng(((Number) p2.get("latitude")).doubleValue(), ((Number) p2.get("longitude")).doubleValue());
+                String type = (String) p1.get("terrain_type");
+                
+                communityPolylines.add(mMap.addPolyline(new PolylineOptions().add(l1, l2).width(10)
+                        .color(SettingsActivity.getTerrainColor(this, type))
+                        .pattern(SettingsActivity.getTerrainPattern(this, type))));
+            } catch (Exception ignored) {}
         }
     }
 
@@ -393,129 +281,101 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
 
     private void showSecurePhoneDialog() {
         new AlertDialog.Builder(this)
-                .setTitle("Secure Phone")
-                .setMessage("Put your phone in a secure place on the wheelchair where it doesn't move around.")
-                .setPositiveButton("OK", (dialog, which) -> startCountdown())
-                .setCancelable(false).show();
+            .setTitle(R.string.secure_phone)
+            .setMessage(R.string.secure_phone_msg)
+            .setPositiveButton("OK", (dialog, which) -> startCountdown())
+            .setCancelable(false).show();
     }
 
     private void startCountdown() {
         recordButton.setBackgroundTintList(ColorStateList.valueOf(Color.RED));
         recordButton.setEnabled(false);
         final int[] secondsLeft = {5};
-        Handler countdownHandler = new Handler(Looper.getMainLooper());
-        Runnable countdownRunnable = new Runnable() {
+        Handler handler = new Handler(Looper.getMainLooper());
+        handler.post(new Runnable() {
             @Override
             public void run() {
                 if (secondsLeft[0] > 0) {
                     recordButton.setText(String.format(Locale.US, "Recording in %d...", secondsLeft[0]));
                     secondsLeft[0]--;
-                    countdownHandler.postDelayed(this, 1000);
-                } else {
-                    startRecording();
-                }
+                    handler.postDelayed(this, 1000);
+                } else startRecording();
             }
-        };
-        countdownHandler.post(countdownRunnable);
+        });
     }
 
     private void startRecording() {
         isRecording = true;
-        recordButton.setEnabled(true);
-        recordButton.setText("Stop Recording");
-        startTime = SystemClock.uptimeMillis();
-        startTimestamp = Timestamp.now();
-        currentRunId = UUID.randomUUID().toString();
+        recordButton.setEnabled(true); recordButton.setText(R.string.stop_recording);
+        startTime = SystemClock.uptimeMillis(); startTimestamp = Timestamp.now(); currentRunId = UUID.randomUUID().toString();
         timerHandler.postDelayed(timerRunnable, 0);
-        Arrays.fill(inputBuffer, 0);
-        inferenceCounter = 0;
-        recentTerrains.clear();
-        currentRunPath.clear();
-        if (mMap != null) mMap.clear();
-        clearCommunityPaths();
-        clearMyPathPolylines();
+        currentRunPath.clear(); if (mMap != null) mMap.clear();
+        clearCommunityPaths(); clearMyPathPolylines();
         isShowingCommunity = false;
-        communityButton.setText("Show Community");
-        if (accelerometer != null) {
-            sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_GAME);
-        }
+        terrainClassifier.start();
     }
 
     private void stopRecording() {
-        sensorManager.unregisterListener(this);
+        terrainClassifier.stop();
         isRecording = false;
         timerHandler.removeCallbacks(timerRunnable);
         recordButton.setBackgroundTintList(ColorStateList.valueOf(Color.parseColor("#388E3C")));
-        recordButton.setText("Start Recording");
-        timerText.setText("00:00");
+        recordButton.setText(R.string.start_recording); timerText.setText("00:00");
         showUploadOptionsDialog();
     }
 
     private void showUploadOptionsDialog() {
-        if (currentRunPath.isEmpty()) {
-            Toast.makeText(this, "No valid path data to save.", Toast.LENGTH_SHORT).show();
-            return;
+        if (currentRunPath.isEmpty()) { 
+            Toast.makeText(this, R.string.no_data, Toast.LENGTH_SHORT).show(); 
+            return; 
         }
-        String[] options = {"Upload to Community", "Save Privately", "Discard"};
+        String[] options = {getString(R.string.upload_community), getString(R.string.save_privately), getString(R.string.discard)};
         new AlertDialog.Builder(this)
-                .setTitle("Recording Finished")
-                .setItems(options, (dialog, which) -> {
-                    switch (which) {
-                        case 0: uploadRunToFirebase(true);  break;
-                        case 1: uploadRunToFirebase(false); break;
-                        case 2: Toast.makeText(this, "Discarded", Toast.LENGTH_SHORT).show(); break;
-                    }
-                })
-                .setCancelable(false).show();
+            .setTitle(R.string.finished)
+            .setItems(options, (dialog, which) -> {
+                if (which == 0) uploadRunToFirebase(true);
+                else if (which == 1) uploadRunToFirebase(false);
+            })
+            .setCancelable(false).show();
     }
 
     private void uploadRunToFirebase(boolean isPublic) {
-        Map<String, Object> runData = new HashMap<>();
-        runData.put("run_id", currentRunId);
-        runData.put("user_id", userId);
-        runData.put("start_time", startTimestamp);
-        runData.put("path", new ArrayList<>(currentRunPath));
-        runData.put("is_public", isPublic);
-        db.collection("recorded_paths").add(runData)
-                .addOnSuccessListener(d -> Toast.makeText(MainActivity.this,
-                        isPublic ? "Path synced to Community!" : "Path saved privately!",
-                        Toast.LENGTH_SHORT).show())
-                .addOnFailureListener(e -> Log.e("Firebase", "Error saving run", e));
+        Map<String, Object> data = new HashMap<>();
+        data.put("run_id", currentRunId); data.put("user_id", userId);
+        data.put("start_time", startTimestamp); data.put("path", new ArrayList<>(currentRunPath)); data.put("is_public", isPublic);
+        db.collection("recorded_paths").add(data).addOnSuccessListener(d -> 
+            Toast.makeText(this, isPublic ? R.string.uploaded_community : R.string.saved_private, Toast.LENGTH_SHORT).show()
+        ).addOnFailureListener(e -> Toast.makeText(this, R.string.save_failed, Toast.LENGTH_SHORT).show());
     }
 
     private void setupLocationUpdates() {
         locationCallback = new LocationCallback() {
             @Override
-            public void onLocationResult(@NonNull LocationResult locationResult) {
-                for (Location location : locationResult.getLocations()) {
-                    LatLng currentLatLng = new LatLng(location.getLatitude(), location.getLongitude());
+            public void onLocationResult(@NonNull LocationResult result) {
+                for (Location loc : result.getLocations()) {
+                    LatLng curr = new LatLng(loc.getLatitude(), loc.getLongitude());
                     if (isFirstLocationUpdate && mMap != null) {
-                        mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(currentLatLng, 19f));
+                        mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(curr, 19f));
                         isFirstLocationUpdate = false;
                     }
                     if (isRecording && lastLatLng != null && mMap != null) {
-                        if (location.hasAccuracy() && location.getAccuracy() > 15f) {
-                            lastLatLng = currentLatLng;
-                            return;
-                        }
                         float[] dist = new float[1];
-                        Location.distanceBetween(lastLatLng.latitude, lastLatLng.longitude,
-                                currentLatLng.latitude, currentLatLng.longitude, dist);
-                        if (dist[0] < 2.0f) return;
-                        mMap.addPolyline(new PolylineOptions()
-                                .add(lastLatLng, currentLatLng)
-                                .color(lastClassificationColor).width(15));
-                        mMap.animateCamera(CameraUpdateFactory.newLatLng(currentLatLng));
-                        if (!"Idle".equals(lastClassificationLabel)) {
-                            Map<String, Object> point = new HashMap<>();
-                            point.put("latitude", location.getLatitude());
-                            point.put("longitude", location.getLongitude());
-                            point.put("terrain_type", lastClassificationLabel);
-                            point.put("timestamp", Timestamp.now());
-                            currentRunPath.add(point);
+                        Location.distanceBetween(lastLatLng.latitude, lastLatLng.longitude, curr.latitude, curr.longitude, dist);
+                        if (dist[0] >= 2.0f) {
+                            mMap.addPolyline(new PolylineOptions().add(lastLatLng, curr).width(15)
+                                    .color(lastClassificationColor)
+                                    .pattern(SettingsActivity.getTerrainPattern(MainActivity.this, lastClassificationLabel)));
+                            
+                            mMap.animateCamera(CameraUpdateFactory.newLatLng(curr));
+                            if (!"Idle".equals(lastClassificationLabel)) {
+                                Map<String, Object> p = new HashMap<>();
+                                p.put("latitude", loc.getLatitude()); p.put("longitude", loc.getLongitude());
+                                p.put("terrain_type", lastClassificationLabel); p.put("timestamp", Timestamp.now());
+                                currentRunPath.add(p);
+                            }
                         }
                     }
-                    lastLatLng = currentLatLng;
+                    lastLatLng = curr;
                 }
             }
         };
@@ -524,118 +384,9 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     @Override
     public void onMapReady(@NonNull GoogleMap googleMap) {
         mMap = googleMap;
-        mMap.setMapType(GoogleMap.MAP_TYPE_NORMAL);
-        if (ActivityCompat.checkSelfPermission(this,
-                Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this,
-                    new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, 1);
-            return;
-        }
-        enableMapFeatures();
-    }
-
-    private void enableMapFeatures() {
-        if (mMap != null && ActivityCompat.checkSelfPermission(this,
-                Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
             mMap.setMyLocationEnabled(true);
-            mMap.getUiSettings().setMyLocationButtonEnabled(true);
-            startLocationUpdates();
-        }
+            fusedLocationClient.requestLocationUpdates(new LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 500).setMinUpdateIntervalMillis(250).build(), locationCallback, Looper.getMainLooper());
+        } else ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, 1);
     }
-
-    private void startLocationUpdates() {
-        LocationRequest locationRequest = new LocationRequest.Builder(
-                Priority.PRIORITY_HIGH_ACCURACY, 500)
-                .setMinUpdateIntervalMillis(250).build();
-        if (ActivityCompat.checkSelfPermission(this,
-                Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-            fusedLocationClient.requestLocationUpdates(locationRequest,
-                    locationCallback, Looper.getMainLooper());
-        }
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
-                                           @NonNull int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == 1 && grantResults.length > 0
-                && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            enableMapFeatures();
-        } else {
-            Toast.makeText(this, "Permission denied.", Toast.LENGTH_LONG).show();
-        }
-    }
-
-    @Override
-    public void onSensorChanged(SensorEvent event) {
-        if (!isRecording) return;
-        if (event.sensor.getType() == Sensor.TYPE_ACCELEROMETER) {
-            System.arraycopy(inputBuffer, 3, inputBuffer, 0, inputBuffer.length - 3);
-            inputBuffer[inputBuffer.length - 3] = event.values[0];
-            inputBuffer[inputBuffer.length - 2] = event.values[1];
-            inputBuffer[inputBuffer.length - 1] = event.values[2];
-            inferenceCounter++;
-            if (inferenceCounter >= INFERENCE_INTERVAL_SAMPLES) {
-                final float[] bufferCopy = inputBuffer.clone();
-                inferenceExecutor.execute(() -> runInference(bufferCopy));
-                inferenceCounter = 0;
-            }
-        }
-    }
-
-    private void runInference(float[] data) {
-        float[] results = classify(data);
-        if (results != null && results.length > 0) {
-            int maxIdx = 0;
-            float maxVal = -1;
-            for (int i = 0; i < results.length; i++) {
-                if (results[i] > maxVal) { maxVal = results[i]; maxIdx = i; }
-            }
-            Terrain detected;
-            switch (maxIdx) {
-                case 1: detected = Terrain.SMOOTH; break;
-                case 2: detected = Terrain.TOUGH;  break;
-                default: detected = Terrain.IDLE;
-            }
-            synchronized (recentTerrains) {
-                recentTerrains.add(detected);
-                if (recentTerrains.size() > SMOOTHING_WINDOW_SIZE) recentTerrains.removeFirst();
-                Terrain smoothed = getMostFrequent(recentTerrains);
-                lastClassificationColor = getTerrainColor(smoothed.label); // NOVO
-                lastClassificationLabel = smoothed.label;
-                final String label = smoothed.label;
-                final float confidence = maxVal;
-                runOnUiThread(() ->
-                        statusText.setText(String.format(Locale.US, "%s %.2f", label, confidence)));
-            }
-        }
-    }
-
-    private Terrain getMostFrequent(List<Terrain> list) {
-        if (list.isEmpty()) return Terrain.IDLE;
-        Terrain winner = list.get(0);
-        int maxCount = 0;
-        for (Terrain t : Terrain.values()) {
-            int count = Collections.frequency(list, t);
-            if (count > maxCount) { maxCount = count; winner = t; }
-        }
-        return winner;
-    }
-
-    @Override public void onAccuracyChanged(Sensor sensor, int accuracy) {}
-
-    @Override
-    protected void onPause() {
-        super.onPause();
-        if (isRecording) sensorManager.unregisterListener(this);
-    }
-
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        inferenceExecutor.shutdown();
-    }
-
-    static { System.loadLibrary("ruker"); }
-    public native float[] classify(float[] input);
 }

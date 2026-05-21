@@ -1,21 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:background="?attr/colorSurface">
 
-
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="24dp"
-        android:layout_marginTop="32dp"
-        android:layout_marginBottom="16dp"
-        android:text="My Paths"
-        android:textSize="28sp"
-        android:textStyle="bold" />
-
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/myPathsToolbar"
+        android:layout_width="match_parent"
+        android:layout_height="?attr/actionBarSize"
+        android:background="?attr/colorSurface"
+        app:title="@string/my_paths"
+        app:navigationIcon="?attr/homeAsUpIndicator" />
 
     <ProgressBar
         android:id="@+id/loadingSpinner"
@@ -25,18 +22,16 @@
         android:layout_marginTop="32dp"
         android:visibility="gone" />
 
-
     <TextView
         android:id="@+id/emptyText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="32dp"
         android:gravity="center"
-        android:text="Nimate še nobene shranjene poti."
+        android:text="@string/no_paths_yet"
         android:textSize="16sp"
         android:textColor="?attr/colorOnSurfaceVariant"
         android:visibility="gone" />
-
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/pathsRecyclerView"

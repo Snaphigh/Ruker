@@ -37,7 +37,7 @@ public class PathAdapter extends RecyclerView.Adapter<PathAdapter.PathViewHolder
     @NonNull
     @Override
     public PathViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-        // Fix: Inflate activity_item_path instead of activity_main
+
         View view = LayoutInflater.from(parent.getContext())
                 .inflate(R.layout.activity_item_path, parent, false);
         return new PathViewHolder(view);
