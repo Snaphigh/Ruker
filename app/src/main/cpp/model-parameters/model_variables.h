@@ -46,7 +46,7 @@
 #include "edge-impulse-sdk/classifier/inferencing_engines/engines.h"
 #include "edge-impulse-sdk/classifier/postprocessing/ei_postprocessing_common.h"
 
-const char* ei_classifier_inferencing_categories_941068_1[] = { "Idle", "Smooth", "tough" };
+const char* ei_classifier_inferencing_categories_941068_1[] = { "Idle", "Rough", "Smooth", "Tough" };
 
 EI_CLASSIFIER_DSP_AXES_INDEX_TYPE ei_dsp_config_941068_2_axes[] = { 0, 1, 2 };
 const uint32_t ei_dsp_config_941068_2_axes_size = 3;
@@ -60,12 +60,12 @@ ei_dsp_config_spectral_analysis_t ei_dsp_config_941068_2 = {
     1.0f, // float filter-cutoff
     6, // int filter-order
     "FFT", // select analysis-type
-    128, // int fft-length
+    512, // int fft-length
     3, // int spectral-peaks-count
     0.1f, // float spectral-peaks-threshold
     "0.1, 0.5, 1.0, 2.0, 5.0", // string spectral-power-edges
     true, // boolean do-log
-    true, // boolean do-fft-overlap
+    false, // boolean do-fft-overlap
     1, // int wavelet-level
     "rbio3.3", // select wavelet
     false // boolean extra-low-freq
@@ -75,7 +75,7 @@ const uint8_t ei_dsp_blocks_941068_1_size = 1;
 ei_model_dsp_t ei_dsp_blocks_941068_1[ei_dsp_blocks_941068_1_size] = {
     { // DSP block 2
         2,
-        204, // output size
+        762, // output size
         &extract_spectral_analysis_features, // DSP function pointer
         (void*)&ei_dsp_config_941068_2, // pointer to config struct
         ei_dsp_config_941068_2_axes, // array of offsets into the input stream, one for each axis
@@ -148,9 +148,9 @@ const ei_impulse_t impulse_941068_1 = {
     .project_name = "wheelchair activity",
     .impulse_id = 1,
     .impulse_name = "Impulse #1",
-    .deploy_version = 1,
+    .deploy_version = 2,
 
-    .nn_input_frame_size = 204,
+    .nn_input_frame_size = 762,
     .raw_sample_count = 125,
     .raw_samples_per_frame = 3,
     .dsp_input_frame_size = 125 * 3,
@@ -179,7 +179,7 @@ const ei_impulse_t impulse_941068_1 = {
     .slices_per_model_window = 4,
 
     .has_anomaly = EI_ANOMALY_TYPE_UNKNOWN,
-    .label_count = 3,
+    .label_count = 4,
     .categories = ei_classifier_inferencing_categories_941068_1,
     .results_type = EI_CLASSIFIER_TYPE_CLASSIFICATION,
     .freeform_outputs_size = freeform_outputs_941068_1_size,
