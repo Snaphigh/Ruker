@@ -33,6 +33,7 @@ import com.google.android.gms.maps.OnMapReadyCallback;
 import com.google.android.gms.maps.SupportMapFragment;
 import com.google.android.gms.maps.model.LatLng;
 import com.google.android.gms.maps.model.LatLngBounds;
+import com.google.android.gms.maps.model.PatternItem;
 import com.google.android.gms.maps.model.Polyline;
 import com.google.android.gms.maps.model.PolylineOptions;
 import com.google.android.material.button.MaterialButton;
@@ -155,11 +156,9 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         if (SettingsActivity.KEY_COLORBLIND.equals(key)) {
             runOnUiThread(() -> {
                 if (isShowingCommunity) {
-                    // Re-draw community paths to update styles instantly
                     fetchCommunityPaths();
                 }
                 if (lastLoadedDocId != null) {
-                    // Re-draw last loaded path to update styles instantly
                     loadAndShowPathOnMap(lastLoadedDocId);
                 }
             });
@@ -199,9 +198,11 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                     LatLng l2 = new LatLng(((Number) p2.get("latitude")).doubleValue(), ((Number) p2.get("longitude")).doubleValue());
                     String terrain = (String) p1.get("terrain_type");
                     
-                    myPathPolylines.add(mMap.addPolyline(new PolylineOptions().add(l1, l2).width(15)
+                    PolylineOptions options = new PolylineOptions().add(l1, l2).width(15)
                             .color(SettingsActivity.getTerrainColor(this, terrain))
-                            .pattern(SettingsActivity.getTerrainPattern(this, terrain))));
+                            .pattern(SettingsActivity.getTerrainPattern(this, terrain));
+                    
+                    myPathPolylines.add(mMap.addPolyline(options));
                 } catch (Exception e) { Log.e("Map", "Error drawing path", e); }
             }
         });
@@ -246,10 +247,10 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         communityButton.setEnabled(false);
         Toast.makeText(this, R.string.loading_community, Toast.LENGTH_SHORT).show();
         
-        db.collection("recorded_paths").whereEqualTo("is_public", true).get().addOnSuccessListener(snapshots -> {
+        db.collection("recorded_paths").whereEqualTo("is_public", true).get().addOnSuccessListener(queryDocumentSnapshots -> {
             clearCommunityPaths();
-            for (QueryDocumentSnapshot doc : snapshots) {
-                drawPathFromData(doc.getData());
+            for (QueryDocumentSnapshot document : queryDocumentSnapshots) {
+                drawPathFromData(document.getData());
             }
             communityButton.setEnabled(true);
             isShowingCommunity = true;
@@ -351,31 +352,31 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     private void setupLocationUpdates() {
         locationCallback = new LocationCallback() {
             @Override
-            public void onLocationResult(@NonNull LocationResult result) {
-                for (Location loc : result.getLocations()) {
-                    LatLng curr = new LatLng(loc.getLatitude(), loc.getLongitude());
+            public void onLocationResult(@NonNull LocationResult locationResult) {
+                for (Location location : locationResult.getLocations()) {
+                    LatLng currentLatLng = new LatLng(location.getLatitude(), location.getLongitude());
                     if (isFirstLocationUpdate && mMap != null) {
-                        mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(curr, 19f));
+                        mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(currentLatLng, 19f));
                         isFirstLocationUpdate = false;
                     }
                     if (isRecording && lastLatLng != null && mMap != null) {
-                        float[] dist = new float[1];
-                        Location.distanceBetween(lastLatLng.latitude, lastLatLng.longitude, curr.latitude, curr.longitude, dist);
+                        float[] dist = new float[1]; Location.distanceBetween(lastLatLng.latitude, lastLatLng.longitude, currentLatLng.latitude, currentLatLng.longitude, dist);
                         if (dist[0] >= 2.0f) {
-                            mMap.addPolyline(new PolylineOptions().add(lastLatLng, curr).width(15)
+                            PolylineOptions options = new PolylineOptions().add(lastLatLng, currentLatLng).width(15)
                                     .color(lastClassificationColor)
-                                    .pattern(SettingsActivity.getTerrainPattern(MainActivity.this, lastClassificationLabel)));
+                                    .pattern(SettingsActivity.getTerrainPattern(MainActivity.this, lastClassificationLabel));
                             
-                            mMap.animateCamera(CameraUpdateFactory.newLatLng(curr));
+                            mMap.addPolyline(options);
+                            mMap.animateCamera(CameraUpdateFactory.newLatLng(currentLatLng));
                             if (!"Idle".equals(lastClassificationLabel)) {
-                                Map<String, Object> p = new HashMap<>();
-                                p.put("latitude", loc.getLatitude()); p.put("longitude", loc.getLongitude());
-                                p.put("terrain_type", lastClassificationLabel); p.put("timestamp", Timestamp.now());
-                                currentRunPath.add(p);
+                                Map<String, Object> point = new HashMap<>();
+                                point.put("latitude", location.getLatitude()); point.put("longitude", location.getLongitude());
+                                point.put("terrain_type", lastClassificationLabel); point.put("timestamp", Timestamp.now());
+                                currentRunPath.add(point);
                             }
                         }
                     }
-                    lastLatLng = curr;
+                    lastLatLng = currentLatLng;
                 }
             }
         };

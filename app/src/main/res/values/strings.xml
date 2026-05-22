@@ -38,4 +38,5 @@
     <string name="path_public">The path is now public.</string>
     <string name="path_private">The path is now private.</string>
     <string name="update_error">Update error: %1$s</string>
+    <string name="tap_to_view">Tap to view on map</string>
 </resources>
