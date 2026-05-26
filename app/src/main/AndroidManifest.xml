@@ -19,7 +19,7 @@
 
         <meta-data
             android:name="com.google.android.geo.API_KEY"
-            android:value="AIzaSyClhe85sfJi3kDjOy8T2tpxgvD-04xcbpc" />
+            android:value="${MAPS_API_KEY}" />
 
         <activity
             android:name=".LoginActivity"
@@ -34,7 +34,6 @@
         <activity android:name=".ProfileActivity" />
         <activity android:name=".MyPathsActivity" />
         <activity android:name=".SettingsActivity" />
-
 
     </application>
 
