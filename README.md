@@ -1,1 +1,7 @@
+*/What is Ruker?
+
 Android application that tracks terrain for wheelchair users. Uses edge impulse for creating a machine learning model for surface classification that users capture when they are moving around. Users must manually start tracking.
+
+
+/How to run:
+
