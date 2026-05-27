@@ -5,7 +5,7 @@ Android application that tracks terrain for wheelchair users. Uses edge impulse 
 // How to run:
 
   1. Get your own Google Maps API Key from the Google Cloud Console.
-  2. In the root folder of the project, find a file named local.properties
+  2. In the root folder of the project, create a file named local.properties (if it doesn't exist).
   3. Add the following line to that file: MAPS_API_KEY=YOUR_ACTUAL_API_KEY_HERE
   4. Build and run the app.
 
