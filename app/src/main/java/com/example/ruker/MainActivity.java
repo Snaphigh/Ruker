@@ -188,6 +188,10 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         mapManager.clearAll();
         isShowingCommunity = false;
         terrainClassifier.start();
+        //foreground service
+        Intent serviceIntent = new Intent(this, RecordingService.class);
+        serviceIntent.putExtra("start_time_millis", System.currentTimeMillis());
+        startForegroundService(serviceIntent);
     }
 
     private void stopRecording() {
@@ -197,6 +201,8 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         recordButton.setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.parseColor("#388E3C")));
         recordButton.setText(R.string.start_recording);
         timerText.setText("00:00");
+        showUploadOptionsDialog();
+        stopService(new Intent(this, RecordingService.class));
         showUploadOptionsDialog();
     }
 
