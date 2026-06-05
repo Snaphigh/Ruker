@@ -1,8 +1,8 @@
-// What is Ruker?
+**What is Ruker?**
 
 Android application that tracks terrain for wheelchair users. Uses edge impulse for creating a machine learning model for surface classification that users capture when they are moving around. Users must manually start tracking.
 
-// How to run:
+**How to run:**
 
   1. Get your own Google Maps API Key from the Google Cloud Console.
   2. In the root folder of the project, create a file named local.properties (if it doesn't exist).
