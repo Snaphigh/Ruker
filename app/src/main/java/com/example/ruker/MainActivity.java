@@ -145,7 +145,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                 if (SettingsActivity.KEY_FONT_SIZE.equals(key)) {
                     SettingsActivity.applyFontSize(this, recordButton, statusText, timerText);
                 } else {
-                    if (isShowingCommunity) toggleCommunityMap(); // Refresh community
+                    if (isShowingCommunity) toggleCommunityMap();
                     if (lastLoadedDocId != null) loadAndShowPathOnMap(lastLoadedDocId);
                 }
             });
@@ -188,7 +188,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         mapManager.clearAll();
         isShowingCommunity = false;
         terrainClassifier.start();
-        //foreground service
+
         Intent serviceIntent = new Intent(this, RecordingService.class);
         serviceIntent.putExtra("start_time_millis", System.currentTimeMillis());
         startForegroundService(serviceIntent);

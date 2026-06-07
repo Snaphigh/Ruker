@@ -21,9 +21,9 @@ public class TerrainClassifier implements SensorEventListener {
 
     public enum Terrain {
         IDLE(Color.GRAY, "Idle"),
-        SMOOTH(Color.parseColor("#4CAF50"), "Smooth"), // Green
-        TOUGH(Color.parseColor("#FFA500"), "Tough"),   // Orange/Yellow
-        ROUGH(Color.parseColor("#F44336"), "Rough");   // Red
+        SMOOTH(Color.parseColor("#4CAF50"), "Smooth"),
+        TOUGH(Color.parseColor("#FFA500"), "Tough"),
+        ROUGH(Color.parseColor("#F44336"), "Rough");
 
         public final int color;
         public final String label;
@@ -101,8 +101,6 @@ public class TerrainClassifier implements SensorEventListener {
             }
 
             Terrain detected;
-            // Map indexes to Terrain enum.
-            // Assumption based on common Edge Impulse order: Idle (0), Smooth (1), Tough (2), Rough (3)
             switch (maxIdx) {
                 case 1: detected = Terrain.SMOOTH; break;
                 case 2: detected = Terrain.TOUGH; break;

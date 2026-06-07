@@ -74,7 +74,7 @@ public class RecordingService extends Service {
             NotificationChannel channel = new NotificationChannel(
                     CHANNEL_ID,
                     "Path Recording",
-                    NotificationManager.IMPORTANCE_LOW  // LOW = no sound on each update
+                    NotificationManager.IMPORTANCE_LOW
             );
             channel.setDescription("Shows recording duration");
             NotificationManager manager = getSystemService(NotificationManager.class);
@@ -85,7 +85,6 @@ public class RecordingService extends Service {
     }
 
     private Notification buildNotification(String time) {
-        // Tapping the notification brings the user back to MainActivity
         Intent notifIntent = new Intent(this, MainActivity.class);
         notifIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
         PendingIntent pendingIntent = PendingIntent.getActivity(
@@ -96,10 +95,10 @@ public class RecordingService extends Service {
         return new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("Recording path...")
                 .setContentText("Duration: " + time)
-                .setSmallIcon(R.drawable.ic_launcher_foreground) // replace with your icon if needed
+                .setSmallIcon(R.mipmap.rukerlogoonly)
                 .setContentIntent(pendingIntent)
-                .setOngoing(true)       // user can't swipe it away
-                .setOnlyAlertOnce(true) // no sound/vibration on updates
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
                 .build();
     }
 

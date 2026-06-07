@@ -6,7 +6,7 @@
 extern "C" JNIEXPORT jfloatArray JNICALL
 Java_com_example_ruker_TerrainClassifier_classify(
         JNIEnv* env,
-        jobject /* this */,
+        jobject,
         jfloatArray input_features) {
 
     jfloat* features = env->GetFloatArrayElements(input_features, 0);

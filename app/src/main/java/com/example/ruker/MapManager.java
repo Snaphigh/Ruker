@@ -79,7 +79,11 @@ public class MapManager {
     }
 
     public void animateCamera(LatLng location, float zoom) {
-        mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(location, zoom));
+        if (zoom == -1f) {
+            mMap.animateCamera(CameraUpdateFactory.newLatLng(location));
+        } else {
+            mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(location, zoom));
+        }
     }
 
     public void moveCamera(LatLng location, float zoom) {
